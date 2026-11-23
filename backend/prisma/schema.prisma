@@ -1,0 +1,43 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Device {
+  id        Int      @id @default(autoincrement())
+  name      String
+  status    String   @default("disconnected")
+  lastSeen  DateTime @default(now())
+  createdAt DateTime @default(now())
+}
+
+model SensorData {
+  id          Int      @id @default(autoincrement())
+  distance    Float
+  pirDetected Boolean
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model DoorEvent {
+  id          Int      @id @default(autoincrement())
+  eventType   String
+  description String
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model Command {
+  id          Int      @id @default(autoincrement())
+  commandType String
+  status      String
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+}

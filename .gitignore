@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+build/
+
+# Environment files (never commit secrets)
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# SQLite databases
+*.db
+*.db-journal
+*.sqlite
+*.sqlite-journal
+backend/prisma/dev.db
+backend/prisma/dev.db-journal
+backend/prisma/prod.db
+backend/prisma/prod.db-journal
+
+# Prisma
+backend/prisma/*.db
+backend/prisma/migrations/**/migration_lock.toml.bak
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# Vite
+frontend/.vite/
