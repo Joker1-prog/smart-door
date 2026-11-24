@@ -8,9 +8,11 @@ const DEVICE_ID = 1;
 const DEVICE_NAME = 'ESP32 DevKit V1 (Blynk)';
 const CACHE_TTL_MS = 4000;
 const DEVICE_UPDATE_INTERVAL_MS = 15_000;
+const PRESENCE_DISTANCE_CM = 100;
 
 function parseMaybeJson(value) {
   if (typeof value !== 'string') return value;
+
   const trimmed = value.trim();
   if (!trimmed) return null;
 
@@ -23,6 +25,7 @@ function parseMaybeJson(value) {
 
 function toBool(value) {
   const parsed = parseMaybeJson(value);
+
   if (typeof parsed === 'boolean') return parsed;
   if (typeof parsed === 'number') return parsed !== 0;
 
@@ -36,8 +39,18 @@ function toBool(value) {
 }
 
 function toNumber(value, fallback = null) {
-  const parsed = Number(parseMaybeJson(value));
-  return Number.isFinite(parsed) ? parsed : fallback;
+  const parsed = parseMaybeJson(value);
+
+  if (
+    parsed === null ||
+    parsed === undefined ||
+    (typeof parsed === 'string' && parsed.trim() === '')
+  ) {
+    return fallback;
+  }
+
+  const number = Number(parsed);
+  return Number.isFinite(number) ? number : fallback;
 }
 
 function normalizeDoorState(value) {
@@ -57,8 +70,13 @@ function normalizeDoorState(value) {
     return 'unknown';
   }
 
-  if (typeof parsed === 'boolean') return parsed ? 'open' : 'closed';
-  if (typeof parsed === 'number') return parsed === 0 ? 'closed' : 'open';
+  if (typeof parsed === 'boolean') {
+    return parsed ? 'open' : 'closed';
+  }
+
+  if (typeof parsed === 'number') {
+    return parsed === 0 ? 'closed' : 'open';
+  }
 
   return 'unknown';
 }
@@ -66,13 +84,15 @@ function normalizeDoorState(value) {
 /**
  * Service Blynk (production).
  *
- * Il lit les virtual pins via l'API HTTP Blynk et transmet les commandes
- * d'ouverture et d'alarme sur les pins configurés.
+ * Lecture des capteurs et des états via les virtual pins Blynk.
+ * Transmission des commandes d'ouverture et d'alarme.
  *
- * Il ne simule rien : sans BLYNK_AUTH_TOKEN, il signale explicitement que
- * l'intégration n'est pas configurée et refuse toute commande.
- *
- * Les pins et le jeton sont définis dans backend/.env (voir .env.example).
+ * V0 : Distance
+ * V1 : Capteur PIR
+ * V2 : Door_Status
+ * V3 : Alarm_Status
+ * V4 : Open_Command
+ * V5 : Alarm_Command
  */
 export class BlynkService {
   constructor() {
@@ -107,15 +127,22 @@ export class BlynkService {
       if (status.device.connected) {
         console.log('[blynk] Connexion au matériel Blynk confirmée.');
       } else {
-        console.warn('[blynk] Matériel Blynk non connecté :', status.system.message);
+        console.warn(
+          '[blynk] Matériel Blynk non connecté :',
+          status.system.message
+        );
       }
     } catch (error) {
-      console.warn('[blynk] Vérification initiale impossible :', error.message);
+      console.warn(
+        '[blynk] Vérification initiale impossible :',
+        error.message
+      );
     }
   }
 
   async request(path, params = {}) {
     const url = new URL(`${config.blynk.baseUrl}${path}`);
+
     url.searchParams.set('token', config.blynk.authToken);
 
     for (const [key, value] of Object.entries(params)) {
@@ -136,7 +163,9 @@ export class BlynkService {
 
     if (!response.ok) {
       const details = text ? ` — ${text.slice(0, 120)}` : '';
-      throw new Error(`Blynk a répondu avec le statut ${response.status}${details}`);
+      throw new Error(
+        `Blynk a répondu avec le statut ${response.status}${details}`
+      );
     }
 
     return text;
@@ -168,7 +197,10 @@ export class BlynkService {
     const connectedText = await this.request('/isHardwareConnected');
 
     if (!toBool(connectedText)) {
-      return { connected: false, values: null };
+      return {
+        connected: false,
+        values: null,
+      };
     }
 
     let values;
@@ -179,11 +211,18 @@ export class BlynkService {
       values = await this.fetchPinsIndividually();
     }
 
-    return { connected: true, values };
+    return {
+      connected: true,
+      values,
+    };
   }
 
   async getStatus({ force = false } = {}) {
-    if (!force && this.cache && Date.now() - this.cacheAt < CACHE_TTL_MS) {
+    if (
+      !force &&
+      this.cache &&
+      Date.now() - this.cacheAt < CACHE_TTL_MS
+    ) {
       return this.cache;
     }
 
@@ -192,7 +231,10 @@ export class BlynkService {
     this.inFlight = this.fetchStatus()
       .catch((error) => {
         this.handleDisconnected(error.message);
-        return this.offlineSnapshot(`Connexion Blynk impossible : ${error.message}`);
+
+        return this.offlineSnapshot(
+          `Connexion Blynk impossible : ${error.message}`
+        );
       })
       .finally(() => {
         this.inFlight = null;
@@ -204,7 +246,7 @@ export class BlynkService {
   async fetchStatus() {
     if (!this.configured) {
       const snapshot = this.offlineSnapshot(
-        'Blynk n’est pas configuré : renseignez BLYNK_AUTH_TOKEN dans backend/.env puis redémarrez le serveur.',
+        'Blynk n’est pas configuré : renseignez BLYNK_AUTH_TOKEN dans les variables d’environnement.',
         true
       );
 
@@ -218,7 +260,11 @@ export class BlynkService {
 
     if (!remote.connected) {
       this.handleDisconnected('Le matériel est hors ligne.');
-      this.cache = this.offlineSnapshot('ESP32 déconnecté de Blynk.');
+
+      this.cache = this.offlineSnapshot(
+        'ESP32 déconnecté de Blynk.'
+      );
+
       this.cacheAt = Date.now();
 
       return this.cache;
@@ -229,20 +275,31 @@ export class BlynkService {
     const pins = config.blynk.pins;
     const values = remote.values;
 
+    // Lecture des capteurs et des états.
     const distanceCm = toNumber(values[pins.distance], null);
     const pirDetected = toBool(values[pins.pir]);
     const doorState = normalizeDoorState(values[pins.doorState]);
     const alarmEnabled = toBool(values[pins.alarm]);
 
-    // Le buzzer n'a pas de Datastream Blynk dédié.
-    // Son état affiché est donc une indication basée sur l'alarme et le PIR.
-    const buzzer = alarmEnabled && pirDetected;
+    // Présence détectée par le PIR ou par le capteur ultrasonique.
+    const ultrasonicDetected =
+      distanceCm !== null &&
+      distanceCm >= 0 &&
+      distanceCm <= PRESENCE_DISTANCE_CM;
+
+    const presenceDetected =
+      pirDetected || ultrasonicDetected;
+
+    // Aucun Datastream Blynk spécifique au buzzer.
+    // Cet indicateur est une estimation, pas un retour matériel réel.
+    const buzzer = alarmEnabled && presenceDetected;
 
     this.logDoorTransitions(doorState);
 
     this.lastKnown = {
       distanceCm,
       pirDetected,
+      presenceDetected,
       alarmEnabled,
       doorState,
       lastSeen: new Date().toISOString(),
@@ -272,7 +329,7 @@ export class BlynkService {
       sensors: {
         distanceCm,
         pirDetected,
-        presence: pirDetected ? 'detected' : 'none',
+        presence: presenceDetected ? 'detected' : 'none',
       },
 
       indicators: {
@@ -323,9 +380,15 @@ export class BlynkService {
   handleConnected() {
     if (this.hardwareConnected !== true) {
       if (this.hardwareConnected === false) {
-        safeLogEvent(EVENT_TYPES.DEVICE_CONNECTED, 'ESP32 reconnecté à Blynk.');
+        safeLogEvent(
+          EVENT_TYPES.DEVICE_CONNECTED,
+          'ESP32 reconnecté à Blynk.'
+        );
       } else {
-        safeLogEvent(EVENT_TYPES.DEVICE_CONNECTED, 'ESP32 connecté à Blynk.');
+        safeLogEvent(
+          EVENT_TYPES.DEVICE_CONNECTED,
+          'ESP32 connecté à Blynk.'
+        );
       }
 
       this.hardwareConnected = true;
@@ -376,7 +439,7 @@ export class BlynkService {
 
       sensors: {
         distanceCm: this.lastKnown?.distanceCm ?? null,
-        pirDetected: false,
+        pirDetected: this.lastKnown?.pirDetected ?? false,
         presence: 'unknown',
       },
 
@@ -400,7 +463,10 @@ export class BlynkService {
   }
 
   updateDeviceRow(status, force = false) {
-    if (!force && Date.now() - this.lastDeviceUpdateAt < DEVICE_UPDATE_INTERVAL_MS) {
+    if (
+      !force &&
+      Date.now() - this.lastDeviceUpdateAt < DEVICE_UPDATE_INTERVAL_MS
+    ) {
       return;
     }
 
@@ -408,7 +474,9 @@ export class BlynkService {
 
     prisma.device
       .upsert({
-        where: { id: DEVICE_ID },
+        where: {
+          id: DEVICE_ID,
+        },
         create: {
           id: DEVICE_ID,
           name: DEVICE_NAME,
@@ -422,7 +490,10 @@ export class BlynkService {
         },
       })
       .catch((error) =>
-        console.error('[blynk] Impossible de mettre à jour le device:', error.message)
+        console.error(
+          '[blynk] Impossible de mettre à jour le device:',
+          error.message
+        )
       );
   }
 
@@ -435,7 +506,9 @@ export class BlynkService {
       );
     }
 
-    const status = await this.getStatus({ force: true });
+    const status = await this.getStatus({
+      force: true,
+    });
 
     if (!status.device.connected) {
       throw new HttpError(
@@ -456,10 +529,16 @@ export class BlynkService {
 
     try {
       command = await prisma.command.create({
-        data: { commandType: 'DOOR_OPEN', status: 'SENT' },
+        data: {
+          commandType: 'DOOR_OPEN',
+          status: 'SENT',
+        },
       });
     } catch (error) {
-      console.error('[blynk] Impossible d’enregistrer la commande:', error.message);
+      console.error(
+        '[blynk] Impossible d’enregistrer la commande:',
+        error.message
+      );
     }
 
     safeLogEvent(
@@ -485,7 +564,9 @@ export class BlynkService {
       );
     }
 
-    const status = await this.getStatus({ force: true });
+    const status = await this.getStatus({
+      force: true,
+    });
 
     if (!status.device.connected) {
       throw new HttpError(
@@ -514,11 +595,16 @@ export class BlynkService {
         },
       });
     } catch (error) {
-      console.error('[blynk] Impossible d’enregistrer la commande:', error.message);
+      console.error(
+        '[blynk] Impossible d’enregistrer la commande:',
+        error.message
+      );
     }
 
     safeLogEvent(
-      enabled ? EVENT_TYPES.ALARM_ENABLED : EVENT_TYPES.ALARM_DISABLED,
+      enabled
+        ? EVENT_TYPES.ALARM_ENABLED
+        : EVENT_TYPES.ALARM_DISABLED,
       `${enabled ? 'Activation' : 'Désactivation'} de l’alarme transmise via Blynk.`
     );
 
@@ -535,8 +621,13 @@ export class BlynkService {
   async shutdown() {
     try {
       await prisma.device.update({
-        where: { id: DEVICE_ID },
-        data: { status: 'offline', lastSeen: new Date() },
+        where: {
+          id: DEVICE_ID,
+        },
+        data: {
+          status: 'offline',
+          lastSeen: new Date(),
+        },
       });
     } catch {
       // La base peut déjà être fermée lors de l'arrêt.
