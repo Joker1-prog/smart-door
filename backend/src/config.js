@@ -1,3 +1,4 @@
+
 import 'dotenv/config';
 
 const nodeEnv = process.env.NODE_ENV || 'development';
@@ -55,17 +56,19 @@ export const config = Object.freeze({
   sessionTtlMinutes: readInt('SESSION_TTL_MINUTES', 480, { min: 1, max: 10080 }),
   accessCode: accessCode || 'smartdoor-demo',
   iotMode: iotMode === 'blynk' ? 'blynk' : 'demo',
+
   blynk: Object.freeze({
     authToken: readString('BLYNK_AUTH_TOKEN'),
     baseUrl: readString('BLYNK_BASE_URL', 'https://blynk.cloud/external/api').replace(/\/+$/, ''),
     timeoutMs: readInt('BLYNK_TIMEOUT_MS', 5000, { min: 1000, max: 30000 }),
+
     pins: Object.freeze({
       distance: readString('BLYNK_PIN_DISTANCE', 'V0'),
       pir: readString('BLYNK_PIN_PIR', 'V1'),
       doorState: readString('BLYNK_PIN_DOOR_STATE', 'V2'),
       alarm: readString('BLYNK_PIN_ALARM', 'V3'),
       doorCommand: readString('BLYNK_PIN_DOOR_COMMAND', 'V4'),
-      buzzer: readString('BLYNK_PIN_BUZZER', 'V5'),
+      alarmCommand: readString('BLYNK_PIN_ALARM_COMMAND', 'V5'),
     }),
   }),
 });
